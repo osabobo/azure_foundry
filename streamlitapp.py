@@ -9,8 +9,8 @@ from azure.ai.agents.models import FilePurpose, CodeInterpreterTool, ListSortOrd
 
 # Initialize environment variables
 load_dotenv()
-PROJECT_ENDPOINT = os.getenv("PROJECT_ENDPOINT")
-MODEL_DEPLOYMENT_NAME = os.getenv("MODEL_DEPLOYMENT_NAME")
+PROJECT_ENDPOINT = st.secrets["azure_API_KEY"]
+MODEL_DEPLOYMENT_NAME ="gpt-4o"
 
 
 def init_agent():
