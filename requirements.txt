@@ -1,2 +1,6 @@
 python-dotenv 
 azure-identity
+streamlit
+azure-ai-agents
+azure-identity
+
