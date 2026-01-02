@@ -1,142 +1,91 @@
+import os
+import pandas as pd
 import streamlit as st
-import tempfile
-from pathlib import Path
-
-from azure.identity import ClientSecretCredential
-from azure.ai.agents import AgentsClient
-from azure.ai.agents.models import FilePurpose, CodeInterpreterTool, MessageRole
+from openai import AzureOpenAI
 
 # ----------------------------
-# Azure configuration (from Streamlit secrets)
+# Azure OpenAI configuration
 # ----------------------------
-PROJECT_ENDPOINT = st.secrets["AZURE_OPENAI_ENDPOINT"]
-TENANT_ID = st.secrets["AZURE_TENANT_ID"]
-CLIENT_ID = st.secrets["AZURE_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["AZURE_CLIENT_SECRET"]
+AZURE_OPENAI_ENDPOINT = st.secrets("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_KEY = st.secrets("AZURE_OPENAI_KEY")
+AZURE_OPENAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+DEPLOYMENT_NAME = "gpt-4.1"  # your deployment name
 
-MODEL_DEPLOYMENT_NAME = "gpt-4o"  # adjust if needed
-
-# ----------------------------
-# Initialize Agent
-# ----------------------------
-def init_agent(uploaded_file):
-    """Upload user file and create an agent."""
-
-    # Save uploaded file to a temporary location
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = Path(tmp.name)
-
-    # Authenticate with Azure
-    credential = ClientSecretCredential(
-        tenant_id=TENANT_ID,
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET,
-    )
-
-    agent_client = AgentsClient(
-        endpoint=PROJECT_ENDPOINT,
-        credential=credential,
-    )
-
-    # Upload file
-    uploaded_azure_file = agent_client.files.upload_and_poll(
-        file_path=tmp_path,
-        purpose=FilePurpose.AGENTS,
-    )
-
-    # Enable code interpreter
-    code_tool = CodeInterpreterTool(file_ids=[uploaded_azure_file.id])
-
-    # Create agent
-    agent = agent_client.create_agent(
-        model=MODEL_DEPLOYMENT_NAME,
-        name="data-agent",
-        instructions=(
-            "You are an AI agent that analyzes the uploaded data file. "
-            "Use Python when calculations or statistics are needed."
-        ),
-        tools=code_tool.definitions,
-        tool_resources=code_tool.resources,
-    )
-
-    # Create conversation thread
-    thread = agent_client.threads.create()
-
-    return agent_client, agent, thread, tmp_path
-
+# Initialize client
+client = AzureOpenAI(
+    api_key=AZURE_OPENAI_KEY,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_version=AZURE_OPENAI_API_VERSION
+)
 
 # ----------------------------
-# Streamlit App
+# Streamlit UI
 # ----------------------------
-def main():
-    st.set_page_config(page_title="Azure AI Data Agent", layout="wide")
-    st.title("📊 Azure AI Data Analysis Agent")
+st.set_page_config(page_title="Azure OpenAI Data Chat", layout="wide")
+st.title("📊 Azure OpenAI Data Chat App")
 
-    # File uploader
-    uploaded_file = st.file_uploader("Upload a data file (TXT / CSV)", type=["txt", "csv"])
+# Initialize conversation
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    if uploaded_file and "agent_client" not in st.session_state:
-        with st.spinner("Uploading file and creating agent..."):
-            (
-                st.session_state.agent_client,
-                st.session_state.agent,
-                st.session_state.thread,
-                st.session_state.local_file_path,
-            ) = init_agent(uploaded_file)
-            st.session_state.messages = []
-        st.success("✅ Agent is ready!")
-
-    # Stop if agent not initialized
-    if "agent_client" not in st.session_state:
-        st.info("Please upload a file to start.")
-        return
-
-    # Show uploaded file content
-    with st.expander("📂 Uploaded File Preview", expanded=True):
-        with open(st.session_state.local_file_path, "r", encoding="utf-8", errors="ignore") as f:
-            st.text(f.read())
-
-    # Chat input
-    user_input = st.chat_input("Ask a question about the data...")
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-
-        agent_client = st.session_state.agent_client
-        agent = st.session_state.agent
-        thread = st.session_state.thread
-
-        # Send user message
-        agent_client.messages.create(thread_id=thread.id, role="user", content=user_input)
-
-        # Run agent
-        run = agent_client.runs.create_and_process(thread_id=thread.id, agent_id=agent.id)
-
-        if run.status == "failed":
-            st.session_state.messages.append({"role": "agent", "content": f"❌ {run.last_error}"})
+# ----------------------------
+# File upload
+# ----------------------------
+uploaded_file = st.file_uploader("Upload a CSV/TXT file to analyze", type=["csv", "txt"])
+if uploaded_file:
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
         else:
-            reply = agent_client.messages.get_last_message_text_by_role(thread_id=thread.id, role=MessageRole.AGENT)
-            if reply:
-                st.session_state.messages.append({"role": "agent", "content": reply.text.value})
-
-    # Render conversation
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # Cleanup button
-    if st.button("🧹 End Session"):
-        st.session_state.agent_client.delete_agent(st.session_state.agent.id)
-        st.session_state.clear()
-        st.success("Session cleared.")
-
+            df = pd.read_csv(uploaded_file, sep="\t", header=None)
+        st.session_state.df_preview = df.head(10)
+        st.dataframe(st.session_state.df_preview)
+    except Exception as e:
+        st.error(f"Failed to read file: {e}")
 
 # ----------------------------
-# Run app
+# Show conversation
 # ----------------------------
-if __name__ == "__main__":
-    main()
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
+# ----------------------------
+# Chat input
+# ----------------------------
+user_input = st.chat_input("Ask a question about your data or anything else...")
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
+    # Build prompt
+    if uploaded_file:
+        prompt = f"You are a helpful data assistant. The user uploaded a dataset:\n{st.session_state.df_preview.to_csv(index=False)}\nNow answer their question:\n{user_input}"
+    else:
+        prompt = f"You are a helpful assistant. Answer the user question:\n{user_input}"
+
+    try:
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            max_completion_tokens=1000,
+            temperature=0.7,
+        )
+        reply = response.choices[0].message.content
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+# ----------------------------
+# Clear chat button
+# ----------------------------
+if st.button("🧹 Clear Chat"):
+    st.session_state.messages = []
+    if "df_preview" in st.session_state:
+        del st.session_state.df_preview
+    st.experimental_rerun()
 
 
