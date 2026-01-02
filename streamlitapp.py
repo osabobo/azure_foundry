@@ -1,6 +1,6 @@
 from azure.identity import ClientSecretCredential
 from openai import AzureOpenAI
-
+import streamlit as st
 credential = ClientSecretCredential(
     tenant_id=st.secrets["AZURE_TENANT_ID"],
     client_id=st.secrets["AZURE_CLIENT_ID"],
