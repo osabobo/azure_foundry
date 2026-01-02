@@ -6,10 +6,10 @@ from openai import AzureOpenAI
 # ----------------------------
 # Azure OpenAI configuration
 # ----------------------------
-AZURE_OPENAI_ENDPOINT = st.secrets["AZURE_OPENAI_ENDPOINT"]  # ✅ Correct
+AZURE_OPENAI_ENDPOINT = st.secrets["AZURE_OPENAI_ENDPOINT"]
 AZURE_OPENAI_KEY = st.secrets["AZURE_OPENAI_KEY"]
 AZURE_OPENAI_API_VERSION = st.secrets.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-DEPLOYMENT_NAME = "gpt-4.1"  # your deployment name
+DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4.1")
 
 # Initialize client
 client = AzureOpenAI(
