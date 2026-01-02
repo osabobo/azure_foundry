@@ -1,84 +1,150 @@
 import streamlit as st
 from azure.identity import ClientSecretCredential
 from azure.ai.agents import AgentsClient
-from azure.ai.agents.models import FilePurpose, MessageRole
+from azure.ai.agents.models import (
+    FilePurpose,
+    CodeInterpreterTool,
+    MessageRole,
+)
 
 # ----------------------------
-# Azure Configuration (from Streamlit secrets)
+# Config
 # ----------------------------
-PROJECT_ENDPOINT = st.secrets["AZURE_API_ENDPOINT"]
+st.set_page_config(
+    page_title="Azure AI Data Agent",
+    page_icon="📊",
+    layout="wide",
+)
+
+PROJECT_ENDPOINT = st.secrets["AZURE_PROJECT_ENDPOINT"]
 TENANT_ID = st.secrets["AZURE_TENANT_ID"]
 CLIENT_ID = st.secrets["AZURE_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["AZURE_CLIENT_SECRET"]
 
-AGENT_ID = st.secrets["AZURE_AGENT_ID"]  # Use your existing agent
+MODEL = "gpt-4o"
 
-# Authenticate once
-credential = ClientSecretCredential(
-    tenant_id=TENANT_ID,
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-)
+# ----------------------------
+# Azure Client (Cached)
+# ----------------------------
+@st.cache_resource
+def get_agent_client():
+    credential = ClientSecretCredential(
+        tenant_id=TENANT_ID,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+    )
+    return AgentsClient(
+        endpoint=PROJECT_ENDPOINT,
+        credential=credential,
+    )
 
-agent_client = AgentsClient(
-    endpoint=PROJECT_ENDPOINT,
-    credential=credential,
+# ----------------------------
+# UI
+# ----------------------------
+st.title("📊 Azure AI Data Analysis Agent")
+st.caption("Secure • Serverless • Production Ready")
+
+uploaded_file = st.file_uploader(
+    "Upload a CSV or TXT file",
+    type=["csv", "txt"],
 )
 
 # ----------------------------
-# Streamlit App
+# Agent Setup
 # ----------------------------
-st.set_page_config(page_title="Azure AI Agent (Streamlit Cloud)", layout="wide")
-st.title("📊 Azure AI Agent (Direct Cloud Upload)")
+if uploaded_file and "agent" not in st.session_state:
+    with st.spinner("Creating secure agent..."):
+        client = get_agent_client()
 
-# File uploader
-uploaded_file = st.file_uploader("Upload a data file (TXT / CSV)", type=["txt", "csv"])
-
-if uploaded_file:
-    with st.spinner("Uploading file to Azure Foundry..."):
-        # Upload directly from uploaded_file (Streamlit cloud file-like object)
-        azure_file = agent_client.files.upload_and_poll(
-            file_path=uploaded_file,
+        # Upload directly from memory (NO DISK)
+        uploaded = client.files.upload_and_poll(
+            file_bytes=uploaded_file.getvalue(),
+            file_name=uploaded_file.name,
             purpose=FilePurpose.AGENTS,
         )
 
-        st.success(f"File uploaded! File ID: {azure_file.id}")
+        tool = CodeInterpreterTool(
+            file_ids=[uploaded.id]
+        )
 
-    # Ask agent
-    user_input = st.text_area("Ask the agent about your data:")
+        agent = client.create_agent(
+            name="data-agent",
+            model=MODEL,
+            instructions=(
+                "You analyze uploaded datasets. "
+                "Use Python for calculations and statistics."
+            ),
+            tools=tool.definitions,
+            tool_resources=tool.resources,
+        )
 
-    if st.button("Ask Agent"):
-        if user_input.strip() == "":
-            st.warning("Please enter a question.")
+        thread = client.threads.create()
+
+        st.session_state.client = client
+        st.session_state.agent = agent
+        st.session_state.thread = thread
+        st.session_state.messages = []
+
+    st.success("Agent ready")
+
+# ----------------------------
+# Chat
+# ----------------------------
+if "agent" in st.session_state:
+    prompt = st.chat_input("Ask a question about your data")
+
+    if prompt:
+        st.session_state.messages.append(
+            {"role": "user", "content": prompt}
+        )
+
+        client = st.session_state.client
+        agent = st.session_state.agent
+        thread = st.session_state.thread
+
+        client.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=prompt,
+        )
+
+        run = client.runs.create_and_process(
+            thread_id=thread.id,
+            agent_id=agent.id,
+        )
+
+        if run.status == "failed":
+            response = f"❌ {run.last_error}"
         else:
-            # Create a conversation thread
-            thread = agent_client.threads.create()
-
-            # Send user message with file reference
-            agent_client.messages.create(
+            msg = client.messages.get_last_message_text_by_role(
                 thread_id=thread.id,
-                role="user",
-                content=f"{user_input}\n\nFile ID: {azure_file.id}"
+                role=MessageRole.AGENT,
             )
+            response = msg.text.value if msg else "No response"
 
-            # Run the existing agent
-            run = agent_client.runs.create_and_process(
-                thread_id=thread.id,
-                agent_id=AGENT_ID,
-            )
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
 
-            if run.status == "failed":
-                st.error(f"Agent failed: {run.last_error}")
-            else:
-                # Fetch agent reply
-                reply = agent_client.messages.get_last_message_text_by_role(
-                    thread_id=thread.id,
-                    role=MessageRole.AGENT,
-                )
-                if reply:
-                    st.markdown("**Agent Response:**")
-                    st.write(reply.text.value)
+# ----------------------------
+# Render Messages
+# ----------------------------
+for m in st.session_state.get("messages", []):
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
 
+# ----------------------------
+# Cleanup
+# ----------------------------
+if st.button("🧹 End Session"):
+    try:
+        st.session_state.client.delete_agent(
+            st.session_state.agent.id
+        )
+    except Exception:
+        pass
+    st.session_state.clear()
+    st.success("Session cleared")
 
 
 
